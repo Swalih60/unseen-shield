@@ -16,8 +16,13 @@ export function Ledger() {
   const anon = useAnon();
   const network = NETWORKS[anon.network];
   const paths = new Map<string, string>();
+  let walletPaths = 0;
+  let checkPaths = 0;
   for (const r of [...anon.reads].reverse()) {
-    if (!paths.has(r.isolationKey)) paths.set(r.isolationKey, `Path ${String.fromCharCode(65 + paths.size)}`);
+    if (paths.has(r.isolationKey)) continue;
+    const isCheck = r.isolationKey.startsWith("check:");
+    const n = isCheck ? ++checkPaths : ++walletPaths;
+    paths.set(r.isolationKey, `${isCheck ? "Double-check" : "Wallet"} ${n}`);
   }
 
   return (
@@ -57,7 +62,7 @@ export function Ledger() {
                   <td className="py-2.5 pr-4">{FRIENDLY[r.method] ?? r.method}</td>
                   <td className="py-2.5 pr-4 text-fog">{paths.get(r.isolationKey)}</td>
                   <td className="py-2.5 pr-4 font-mono text-fog">
-                    {r.ok ? r.endpoint : <span className="text-ember">{r.endpoint} refused, retried</span>}
+                    {r.ok ? r.endpoint : <span className="text-ember">{r.endpoint}: no answer, tried the next</span>}
                   </td>
                   <td className="py-2.5 text-right font-mono tabular-nums text-fog">{(r.ms / 1000).toFixed(1)}s</td>
                 </tr>

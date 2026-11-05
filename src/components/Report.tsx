@@ -85,7 +85,9 @@ export function Report({ report }: { report: WalletReport }) {
         Checked {TOKENS.length} tokens against {SPENDERS.length} contracts in {report.reads} private {report.reads === 1 ? "request" : "requests"}. No provider saw this wallet next to your IP.
       </p>
 
-      <div className="divide-y divide-line">
+      <CrossCheckLine report={report} />
+
+      <div className="divide-y divide-line border-b border-line">
         {GROUPS.map((g) => {
           const items = report.approvals.filter((a) => a.severity === g.severity);
           if (items.length === 0) return null;
@@ -114,7 +116,43 @@ export function Report({ report }: { report: WalletReport }) {
           );
         })}
       </div>
+      {report.approvals.length > 0 && (
+        <p className="px-6 py-4 text-sm text-fog md:px-8">
+          Revoking sends a transaction from your own wallet (MetaMask, Rabby…), and every transaction on Ethereum is
+          public. Checking stays private; cancelling can&apos;t be.
+        </p>
+      )}
     </motion.article>
+  );
+}
+
+function CrossCheckLine({ report }: { report: WalletReport }) {
+  const c = report.crossCheck;
+  if (c.state === "agreed") {
+    return (
+      <p className="flex items-center gap-2 border-b border-line px-6 py-3 text-sm text-fog md:px-8">
+        <svg viewBox="0 0 16 16" className="size-4 shrink-0 text-veil" aria-hidden>
+          <path d="M3 8.5l3 3 7-7" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span>
+          Double-checked: two independent providers ({c.providers.join(" and ")}) gave identical answers, so neither
+          could fake this result.
+        </span>
+      </p>
+    );
+  }
+  if (c.state === "disagreed") {
+    return (
+      <p role="alert" className="border-b border-line bg-flare/10 px-6 py-3 text-sm text-mist md:px-8">
+        The two providers ({c.providers.join(" and ")}) gave different answers. One of them may be wrong or lying.
+        Scan again before trusting this result.
+      </p>
+    );
+  }
+  return (
+    <p className="border-b border-line px-6 py-3 text-sm text-fog md:px-8">
+      Not double-checked: {c.reason.toLowerCase()}. The result comes from a single provider.
+    </p>
   );
 }
 

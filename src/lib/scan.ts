@@ -73,6 +73,10 @@ export type Approval = {
   reason: string;
 };
 
+// A second, independent provider answers the same questions at the same block.
+// If both agree, one dishonest provider can't fake a "safe" result.
+export type CrossCheck = { state: "agreed"; providers: string[] } | { state: "disagreed"; providers: string[] } | { state: "skipped"; reason: string };
+
 export type WalletReport = {
   input: string;
   address: Address;
@@ -83,6 +87,7 @@ export type WalletReport = {
   score: number;
   scannedAt: number;
   reads: number;
+  crossCheck: CrossCheck;
 };
 
 // Anything at or above 2^96 base units is effectively "everything you'll ever hold".
@@ -99,7 +104,20 @@ export async function resolveWallet(client: PublicClient, input: string): Promis
   throw new Error(`"${value}" isn't a wallet address or an ENS name.`);
 }
 
-export async function scanWallet(client: PublicClient, input: string, readsBefore: () => number): Promise<WalletReport> {
+type CrossCheckOptions = {
+  // The provider that answered a given private path most recently.
+  providerOf: (isolationKey: string) => string | undefined;
+  mainKey: string;
+  // A second private client on its own path that avoids the given provider.
+  makeClient: (avoid: string | undefined) => { client: PublicClient; key: string };
+};
+
+export async function scanWallet(
+  client: PublicClient,
+  input: string,
+  readsBefore: () => number,
+  verify?: CrossCheckOptions,
+): Promise<WalletReport> {
   const start = readsBefore();
   const { address: owner, ensName } = await resolveWallet(client, input);
 
@@ -133,10 +151,31 @@ export async function scanWallet(client: PublicClient, input: string, readsBefor
     { address: PRICE_FEEDS.btc, abi: feedAbi, functionName: "latestRoundData" as const },
   ];
 
+  // Read at a fixed block, a couple behind the tip, so a second provider can answer the exact same question.
+  const blockNumber = (await client.getBlockNumber()) - 2n;
   const [results, ethBalance] = await Promise.all([
-    client.multicall({ contracts, allowFailure: true }),
-    client.getBalance({ address: owner }),
+    client.multicall({ contracts, allowFailure: true, blockNumber, batchSize: 64_000 }),
+    client.getBalance({ address: owner, blockNumber }),
   ]);
+
+  let crossCheck: CrossCheck = { state: "skipped", reason: "Not requested" };
+  if (verify) {
+    try {
+      const first = verify.providerOf(verify.mainKey);
+      const checker = verify.makeClient(first);
+      const again = await checker.client.multicall({ contracts, allowFailure: true, blockNumber, batchSize: 64_000 });
+      const { compared, mismatched } = compare(results, again);
+      const providers = [first ?? "first provider", verify.providerOf(checker.key) ?? "second provider"];
+      crossCheck =
+        mismatched > 0
+          ? { state: "disagreed", providers }
+          : compared === 0
+            ? { state: "skipped", reason: "The second provider couldn't answer" }
+            : { state: "agreed", providers };
+    } catch {
+      crossCheck = { state: "skipped", reason: "No second provider answered in time" };
+    }
+  }
 
   let i = 0;
   const direct = directPairs.map((p) => ({ ...p, r: results[i++] }));
@@ -209,6 +248,7 @@ export async function scanWallet(client: PublicClient, input: string, readsBefor
     score: scoreOf(approvals),
     scannedAt: Date.now(),
     reads: readsBefore() - start,
+    crossCheck,
   };
 }
 
@@ -238,6 +278,21 @@ function scoreOf(approvals: Approval[]) {
   let score = 100;
   for (const a of approvals) score -= a.severity === "critical" ? 45 : a.severity === "medium" ? 12 : 3;
   return Math.max(0, score);
+}
+
+// Compare only answers both providers actually gave. A free provider refusing a
+// call (rate or gas limits) is not a disagreement; a different number is.
+function compare(a: readonly { status: string; result?: unknown }[], b: readonly { status: string; result?: unknown }[]) {
+  const text = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
+  let compared = 0;
+  let mismatched = 0;
+  a.forEach((r, i) => {
+    const other = b[i];
+    if (r.status !== "success" || other?.status !== "success") return;
+    compared++;
+    if (text(r.result) !== text(other.result)) mismatched++;
+  });
+  return { compared, mismatched };
 }
 
 function feedPrice(r: { status: string; result?: unknown }): number | null {
