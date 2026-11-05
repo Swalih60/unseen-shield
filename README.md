@@ -1,6 +1,6 @@
 # Unseen Shield
 
-**Find what can drain your wallet, without telling anyone the wallet is yours.**
+**Find what can drain your wallet, and see everything you hold, without telling anyone the wallets are yours.**
 
 Old token approvals let apps spend your tokens forever. If one of those contracts is hacked, attackers drain wallets through approvals people forgot about: LI.FI lost about $10M this way in July 2024, Socket about $3.3M in January 2024.
 
@@ -12,16 +12,17 @@ Built at ETHGlobal Mumbai for the Ethereum Foundation tracks *Best Use of Anon-R
 
 ## What it does
 
-1. **Connects privately.** On page load it starts an Anon-RPC worker in the background (Nym by default, which connects in about 10 to 20 seconds). You can switch to Tor or Nox. While it connects, it shows what the network is doing.
+1. **Connects privately.** On page load it starts an Anon-RPC worker in the background (Nym by default, which connects in about 10 to 20 seconds). You can switch to Nox. While it connects, it shows what the network is doing. Tor support is built in but hidden from the picker for now, because the public tor-js demo gateway was too overloaded to connect reliably.
 2. **Scans.** For each wallet you add (address or ENS name), it checks 11 popular tokens against 13 commonly approved contracts, including Permit2 sub-approvals. It also reads balances and Chainlink prices so it can show how much money is exposed.
 3. **Judges.** Each approval is labeled:
    - **Revoke now:** the contract was drained through approvals (LI.FI Diamond, Socket Gateway)
    - **Worth reviewing:** unlimited approval on a token you hold
    - **Fine for now:** limited, or a token you don't hold
 4. **Revokes.** One click sets an approval back to zero through your own wallet.
-5. **Double-checks.** A second, independent provider, on its own private path, answers the same questions at the same block. If both agree, one dishonest provider can't fake a "safe" result. If they disagree, the report says so.
-6. **Shows its work.** The *What left this device* panel lists every request, which private path it took and which provider answered.
-7. **Leak lab.** Runs the same scan the ordinary way through a pretend provider, so you can watch it write down your IP, device and linked wallets. Unseen Shield's requests never reach it.
+5. **Portfolio.** The same private requests also read your ETH and token balances plus Chainlink prices, so the Portfolio tab shows your total value, each asset and each wallet with no extra requests. Normal portfolio apps link all your wallets together for the provider; here each wallet takes its own path.
+6. **Double-checks.** A second, independent provider, on its own private path, answers the same questions at the same block. If both agree, one dishonest provider can't fake a "safe" result. If they disagree, the report says so.
+7. **Shows its work.** The *What left this device* panel lists every request, which private path it took and which provider answered.
+8. **Leak lab.** Runs the same scan the ordinary way through a pretend provider, so you can watch it write down your IP, device and linked wallets. Unseen Shield's requests never reach it.
 
 ## How Anon-RPC is used
 

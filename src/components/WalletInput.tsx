@@ -11,11 +11,22 @@ type Props = {
   onRemember: (on: boolean) => void;
   onScan: () => void;
   canScan: boolean;
+  actionLabel?: string;
   scanning: boolean;
   waitingFor?: string;
 };
 
-export function WalletInput({ wallets, onChange, remember, onRemember, onScan, canScan, scanning, waitingFor }: Props) {
+export function WalletInput({
+  wallets,
+  onChange,
+  remember,
+  onRemember,
+  onScan,
+  canScan,
+  actionLabel = "Scan",
+  scanning,
+  waitingFor,
+}: Props) {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -99,7 +110,11 @@ export function WalletInput({ wallets, onChange, remember, onRemember, onScan, c
           disabled={!canScan || scanning || wallets.length === 0}
           className="rounded-xl bg-veil px-6 py-3.5 font-display text-[17px] font-semibold text-night transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {scanning ? "Scanning privately…" : wallets.length > 1 ? `Scan ${wallets.length} wallets privately` : "Scan privately"}
+          {scanning
+            ? "Checking privately…"
+            : wallets.length > 1
+              ? `${actionLabel} for ${wallets.length} wallets privately`
+              : `${actionLabel} privately`}
         </button>
         <label className="flex cursor-pointer items-center gap-2.5 text-sm text-fog">
           <input

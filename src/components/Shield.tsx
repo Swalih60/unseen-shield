@@ -2,18 +2,19 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { connect, NoProviderAnswered, privateClient, providerOf, reconnect, sentCount } from "@/lib/anon";
+import { anonStatus, connect, NoProviderAnswered, privateClient, providerOf, reconnect } from "@/lib/anon";
 import { scanWallet, type WalletReport } from "@/lib/scan";
 import { getRemember, loadWallets, saveWallets, setRemember } from "@/lib/storage";
 import { LeakLab } from "./LeakLab";
 import { Ledger } from "./Ledger";
 import { NetworkBar, StatusPill } from "./NetworkBar";
+import { Portfolio } from "./Portfolio";
 import { Report } from "./Report";
 import { RouteTrace } from "./RouteTrace";
 import { useAnon } from "./useAnon";
 import { WalletInput } from "./WalletInput";
 
-type Tab = "scan" | "lab";
+type Tab = "scan" | "portfolio" | "lab";
 type Failure = { input: string; message: string };
 
 export function Shield() {
@@ -69,12 +70,14 @@ export function Shield() {
     Promise.allSettled(
       wallets.map((w) => {
         const mainKey = `wallet:${crypto.randomUUID()}`;
-        return scanWallet(privateClient(mainKey), w, sentCount, {
+        const checkKey = `check:${mainKey}`;
+        const readsFor = () =>
+          anonStatus.get().reads.filter((r) => r.ok && (r.isolationKey === mainKey || r.isolationKey === checkKey)).length;
+        return scanWallet(privateClient(mainKey), w, readsFor, {
           mainKey,
           providerOf,
           makeClient: (avoid) => {
-            const key = `check:${crypto.randomUUID()}`;
-            return { client: privateClient(key, { avoid }), key };
+            return { client: privateClient(checkKey, { avoid }), key: checkKey };
           },
         });
       }),
@@ -98,7 +101,8 @@ export function Shield() {
         <nav aria-label="Sections" className="flex items-center gap-1 rounded-full border border-line p-1">
           {(
             [
-              ["scan", "Scan"],
+              ["scan", "Safety check"],
+              ["portfolio", "Portfolio"],
               ["lab", "Leak lab"],
             ] as const
           ).map(([id, label]) => (
@@ -117,16 +121,17 @@ export function Shield() {
         </div>
       </header>
 
-      {tab === "scan" ? (
+      {tab !== "lab" ? (
         <main>
           <section className="grid gap-10 pt-8 lg:grid-cols-[1.25fr_1fr] lg:items-start lg:gap-14 lg:pt-14">
             <div>
               <h1 className="max-w-[14ch] font-display text-[clamp(40px,6.4vw,76px)] font-semibold leading-[0.98] tracking-[-0.025em]">
-                Find what can drain your wallet.
+                {tab === "scan" ? "Find what can drain your wallet." : "See what you hold, unseen."}
               </h1>
               <p className="mt-6 max-w-[48ch] text-lg leading-relaxed text-fog">
-                Old approvals let apps spend your tokens forever. Unseen Shield finds them and lets you revoke
-                them, and every check travels through Anon-RPC, so no one learns the wallet is yours.
+                {tab === "scan"
+                  ? "Old approvals let apps spend your tokens forever. Unseen Shield finds them and lets you revoke them, and every check travels through Anon-RPC, so no one learns the wallet is yours."
+                  : "Checking balances in a normal app tells the provider which wallets are yours and links them together. Here every balance is read through Anon-RPC, and each wallet takes its own path."}
               </p>
               <div className="mt-10">
                 <WalletInput
@@ -138,6 +143,7 @@ export function Shield() {
                     setRemember(on, wallets);
                   }}
                   onScan={scan}
+                  actionLabel={tab === "scan" ? "Scan" : "Check balances"}
                   canScan={ready}
                   scanning={scanning}
                   waitingFor={waitingFor}
@@ -165,14 +171,25 @@ export function Shield() {
                 Results
               </h2>
               <div className="grid gap-6">
+                {tab === "portfolio" && reports.length > 0 && <Portfolio reports={reports} />}
                 {failures.map((f) => (
                   <p key={f.input} role="alert" className="rounded-2xl border border-flare/40 bg-flare/10 p-4 text-sm">
                     <span className="font-mono">{f.input}</span>: {f.message}
                   </p>
                 ))}
-                {reports.map((r) => (
-                  <Report key={r.address} report={r} />
-                ))}
+                {tab === "scan" && reports.map((r) => <Report key={r.address} report={r} />)}
+                {reports.length > 0 && (
+                  <p className="text-sm text-fog">
+                    {tab === "scan" ? "Your balances from this scan are on the " : "The safety check from this scan is on the "}
+                    <button
+                      onClick={() => setTab(tab === "scan" ? "portfolio" : "scan")}
+                      className="text-mist underline underline-offset-4 hover:text-veil"
+                    >
+                      {tab === "scan" ? "Portfolio" : "Safety check"} tab
+                    </button>
+                    . One private scan fills both.
+                  </p>
+                )}
               </div>
             </section>
           )}

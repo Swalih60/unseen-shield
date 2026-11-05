@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { connect, NETWORKS, type NetworkId, type OutgoingRead } from "@/lib/anon";
 import { useAnon } from "./useAnon";
 
-const ORDER: NetworkId[] = ["nym", "tor", "nox", "passthrough"];
+// Tor is left out for now: its public demo gateway was too overloaded to connect reliably.
+const ORDER: NetworkId[] = ["nym", "nox", "passthrough"];
 
 export function NetworkBar() {
   const anon = useAnon();

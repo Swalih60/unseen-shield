@@ -77,11 +77,16 @@ export type Approval = {
 // If both agree, one dishonest provider can't fake a "safe" result.
 export type CrossCheck = { state: "agreed"; providers: string[] } | { state: "disagreed"; providers: string[] } | { state: "skipped"; reason: string };
 
+export type Holding = { symbol: string; name: string; amount: number; usd: number | null };
+
 export type WalletReport = {
   input: string;
   address: Address;
   ensName?: string;
   ethBalance: bigint;
+  // Everything this wallet holds among the assets we check, read in the same private requests.
+  holdings: Holding[];
+  holdingsUsd: number;
   approvals: Approval[];
   exposedUsd: number;
   score: number;
@@ -189,6 +194,20 @@ export async function scanWallet(
   const btcUsd = feedPrice(results[i++]);
   const priceOf = (t: Token) => (t.price === "usd" ? 1 : t.price === "eth" ? ethUsd : t.price === "btc" ? btcUsd : null);
 
+  const holdings: Holding[] = [];
+  if (ethBalance > 0n) {
+    const amount = Number(formatUnits(ethBalance, 18));
+    holdings.push({ symbol: "ETH", name: "Ether", amount, usd: ethUsd === null ? null : amount * ethUsd });
+  }
+  for (const token of TOKENS) {
+    const raw = balances.get(token.address) ?? 0n;
+    if (raw === 0n) continue;
+    const amount = Number(formatUnits(raw, token.decimals));
+    const price = priceOf(token);
+    holdings.push({ symbol: token.symbol, name: token.name, amount, usd: price === null ? null : amount * price });
+  }
+  holdings.sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
+
   const now = Math.floor(Date.now() / 1000);
   const approvals: Approval[] = [];
 
@@ -243,6 +262,8 @@ export async function scanWallet(
     address: owner,
     ensName,
     ethBalance,
+    holdings,
+    holdingsUsd: holdings.reduce((sum, h) => sum + (h.usd ?? 0), 0),
     approvals,
     exposedUsd,
     score: scoreOf(approvals),
