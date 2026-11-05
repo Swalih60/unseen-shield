@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+/*
+  Unseen Shield palette: a night sky, and three signal colors.
+  veil  = private / safe (the request travelled hidden)
+  ember = worth reviewing
+  flare = act now
+*/
+:root {
+  --night: #0c1322;
+  --deep: #121b2e;
+  --raise: #18233a;
+  --line: #26324c;
+  --mist: #e6eaf4;
+  --fog: #8e99b4;
+  --veil: #a6e6d4;
+  --ember: #ffb26b;
+  --flare: #ff6178;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-night: var(--night);
+  --color-deep: var(--deep);
+  --color-raise: var(--raise);
+  --color-line: var(--line);
+  --color-mist: var(--mist);
+  --color-fog: var(--fog);
+  --color-veil: var(--veil);
+  --color-ember: var(--ember);
+  --color-flare: var(--flare);
+  --font-display: var(--font-bricolage);
+  --font-sans: var(--font-plex);
+  --font-mono: var(--font-plex-mono);
+}
+
+html,
+body {
+  background: var(--night);
+  color: var(--mist);
+}
+
+body {
+  font-family: var(--font-plex), system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  /* A faint star field, so the page reads as "night" rather than "dark mode". */
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, rgb(230 234 244 / 0.18), transparent 60%),
+    radial-gradient(1px 1px at 78% 9%, rgb(230 234 244 / 0.14), transparent 60%),
+    radial-gradient(1px 1px at 63% 42%, rgb(230 234 244 / 0.1), transparent 60%),
+    radial-gradient(1px 1px at 31% 71%, rgb(230 234 244 / 0.1), transparent 60%),
+    radial-gradient(1px 1px at 89% 64%, rgb(230 234 244 / 0.12), transparent 60%),
+    radial-gradient(900px 500px at 85% -10%, rgb(166 230 212 / 0.06), transparent 70%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgb(166 230 212 / 0.3);
+}
+
+:focus-visible {
+  outline: 2px solid var(--veil);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
