@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { connect, privateClient, sentCount } from "@/lib/anon";
+import { connect, NoProviderAnswered, privateClient, providerOf, reconnect, sentCount } from "@/lib/anon";
 import { scanWallet, type WalletReport } from "@/lib/scan";
 import { getRemember, loadWallets, saveWallets, setRemember } from "@/lib/storage";
 import { LeakLab } from "./LeakLab";
@@ -32,7 +32,7 @@ export function Shield() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setWallets(loadWallets());
     setRememberState(getRemember());
-    connect("tor").catch(() => {});
+    connect("nym").catch(() => {});
   }, []);
 
   const updateWallets = (next: string[]) => {
@@ -43,20 +43,42 @@ export function Shield() {
   const scan = async () => {
     setScanning(true);
     setFailures([]);
-    // One isolation key per wallet: their requests can't be linked to each other.
-    const results = await Promise.allSettled(
-      wallets.map((w) => scanWallet(privateClient(`wallet:${crypto.randomUUID()}`), w, sentCount)),
-    );
+    let results = await scanAll();
+    // If no provider answered at all, the exit node is probably dead: build a new route and try once more.
+    if (results.some((r) => r.status === "rejected" && hasCause(r.reason, NoProviderAnswered))) {
+      try {
+        await reconnect();
+        results = await scanAll();
+      } catch {
+        // keep the first results; the failure message explains what happened
+      }
+    }
     const ok: WalletReport[] = [];
     const bad: Failure[] = [];
     results.forEach((r, i) => {
       if (r.status === "fulfilled") ok.push(r.value);
-      else bad.push({ input: wallets[i], message: r.reason instanceof Error ? r.reason.message.split("\n")[0] : String(r.reason) });
+      else bad.push({ input: wallets[i], message: explain(r.reason) });
     });
     setReports(ok);
     setFailures(bad);
     setScanning(false);
   };
+
+  // One isolation key per wallet: their requests can't be linked to each other.
+  const scanAll = () =>
+    Promise.allSettled(
+      wallets.map((w) => {
+        const mainKey = `wallet:${crypto.randomUUID()}`;
+        return scanWallet(privateClient(mainKey), w, sentCount, {
+          mainKey,
+          providerOf,
+          makeClient: (avoid) => {
+            const key = `check:${crypto.randomUUID()}`;
+            return { client: privateClient(key, { avoid }), key };
+          },
+        });
+      }),
+    );
 
   const ready = anon.phase === "ready";
   const waitingFor =
@@ -173,6 +195,26 @@ export function Shield() {
       </footer>
     </div>
   );
+}
+
+function hasCause(err: unknown, type: new (...args: never[]) => Error): boolean {
+  let e: unknown = err;
+  while (e instanceof Error) {
+    if (e instanceof type) return true;
+    e = (e as Error & { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+// viem wraps our errors ("An unknown RPC error occurred"); show the real reason underneath.
+function explain(err: unknown): string {
+  let e: unknown = err;
+  let message = err instanceof Error ? err.message : String(err);
+  while (e instanceof Error) {
+    if (!/unknown RPC error|^\s*$/i.test(e.message)) message = e.message;
+    e = (e as Error & { cause?: unknown }).cause;
+  }
+  return message.split("\n")[0];
 }
 
 function Mark() {

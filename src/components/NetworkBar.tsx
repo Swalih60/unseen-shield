@@ -1,9 +1,10 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { connect, NETWORKS, type NetworkId, type OutgoingRead } from "@/lib/anon";
 import { useAnon } from "./useAnon";
 
-const ORDER: NetworkId[] = ["tor", "nym", "nox", "passthrough"];
+const ORDER: NetworkId[] = ["nym", "tor", "nox", "passthrough"];
 
 export function NetworkBar() {
   const anon = useAnon();
@@ -60,6 +61,13 @@ export function NetworkBar() {
         })}
       </div>
 
+      {anon.phase === "connecting" && anon.progress && (
+        <p aria-live="polite" className="mt-4 flex items-center gap-3 text-sm text-fog">
+          <span aria-hidden className="size-3.5 animate-spin rounded-full border-2 border-line border-t-veil" />
+          {anon.progress}… <Elapsed since={anon.connectStarted} />
+        </p>
+      )}
+
       {anon.phase === "failed" && (
         <div role="alert" className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-flare/40 bg-flare/10 px-4 py-3 text-sm text-mist">
           <span className="min-w-0 flex-1">{anon.error}</span>
@@ -75,6 +83,16 @@ export function NetworkBar() {
       )}
     </section>
   );
+}
+
+function Elapsed({ since }: { since?: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!since) return null;
+  return <span className="tabular-nums text-fog/70">{Math.max(0, Math.round((now - since) / 1000))}s</span>;
 }
 
 function avgTrip(reads: OutgoingRead[]) {

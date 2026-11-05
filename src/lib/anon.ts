@@ -76,9 +76,10 @@ const BOOTSTRAP_RPCS: Record<AnonNetwork["specifierChain"], string[]> = {
 // traffic from anonymizing networks, so we rotate on failure.
 const MAINNET_RPCS = [
   "https://ethereum-rpc.publicnode.com",
+  "https://rpc.mevblocker.io",
+  "https://eth-mainnet.public.blastapi.io",
   "https://1rpc.io/eth",
   "https://eth.drpc.org",
-  "https://rpc.flashbots.net",
 ];
 
 // ---------------------------------------------------------------------------
@@ -101,12 +102,15 @@ export type AnonStatus = {
   phase: Phase;
   error?: string;
   connectMs?: number;
+  // What the private network is doing right now, while it connects.
+  progress?: string;
+  connectStarted?: number;
   reads: OutgoingRead[];
   // Every answered request since the page opened.
   sent: number;
 };
 
-let status: AnonStatus = { network: "tor", phase: "idle", reads: [], sent: 0 };
+let status: AnonStatus = { network: "nym", phase: "idle", reads: [], sent: 0 };
 const listeners = new Set<() => void>();
 
 function setStatus(patch: Partial<AnonStatus>) {
@@ -152,45 +156,130 @@ async function bootstrapRequest(chain: AnonNetwork["specifierChain"], method: st
   throw lastError;
 }
 
+// Each connection attempt gets a number. When the user switches networks, older
+// attempts are abandoned: they close their own worker and never touch the
+// shared state, so a slow old attempt can't kill the new connection.
+let generation = 0;
+let inflight: { network: NetworkId; gen: number; promise: Promise<AnonRpcWorkerType> } | null = null;
+
+let pendingWorker: AnonRpcWorkerType | null = null;
+
+class Superseded extends Error {}
+
 /** Start (or reuse) the private connection. Safe to call many times. */
-export async function connect(networkId: NetworkId): Promise<AnonRpcWorkerType> {
-  if (worker && workerNetwork === networkId && status.phase === "ready") return worker;
-  if (worker) {
-    worker.close();
-    worker = null;
-  }
+export function connect(networkId: NetworkId): Promise<AnonRpcWorkerType> {
+  if (worker && workerNetwork === networkId && status.phase === "ready") return Promise.resolve(worker);
+  // Already connecting to this network: share that attempt (React dev mode calls effects twice).
+  if (inflight && inflight.network === networkId) return inflight.promise;
+
+  const gen = ++generation;
+  worker?.close();
+  worker = null;
+  workerNetwork = null;
+  // Stop any attempt still connecting, so networks don't compete for bandwidth.
+  pendingWorker?.close();
+  pendingWorker = null;
 
   const network = NETWORKS[networkId];
-  const started = performance.now();
-  setStatus({ network: networkId, phase: "connecting", error: undefined, connectMs: undefined });
+  setStatus({
+    network: networkId,
+    phase: "connecting",
+    error: undefined,
+    connectMs: undefined,
+    progress: "Downloading the private network client",
+    connectStarted: Date.now(),
+  });
 
+  const promise = (async () => {
+    const started = performance.now();
+    let w: AnonRpcWorkerType | null = null;
+    // Slow or flaky internet often fails the first try, so try twice before giving up.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        // The harness touches window and WebRTC, so load it only in the browser.
+        const { AnonRpcWorker } = await import("@anon-rpc/browser-harness");
+        if (gen !== generation) throw new Superseded();
+        w = pendingWorker = new AnonRpcWorker({
+          address: network.specifier,
+          config: network.config as never,
+          preExisting: {
+            rpcProvider: {
+              request: ({ method, params }) => bootstrapRequest(network.specifierChain, method, params),
+            },
+          },
+        });
+        followProgress(w, gen);
+        await withTimeout(w.ready, 120_000, `${network.name} took too long to connect`);
+        if (gen !== generation) throw new Superseded();
+        worker = w;
+        workerNetwork = networkId;
+        pendingWorker = null;
+        setStatus({ phase: "ready", connectMs: Math.round(performance.now() - started), progress: undefined });
+        if (inflight?.gen === gen) inflight = null;
+        return w;
+      } catch (err) {
+        if (worker !== w) w?.close();
+        if (pendingWorker === w) pendingWorker = null;
+        w = null;
+        if (gen === generation && !(err instanceof Superseded) && attempt < 2 && !isClosed(err)) {
+          setStatus({ progress: "First try failed. Trying again" });
+          continue;
+        }
+        if (inflight?.gen === gen) inflight = null;
+        if (gen === generation && !(err instanceof Superseded)) {
+          setStatus({ phase: "failed", error: describeError(err, network.name), progress: undefined });
+        }
+        throw err;
+      }
+    }
+  })();
+
+  inflight = { network: networkId, gen, promise };
+  return promise;
+}
+
+function isClosed(err: unknown) {
+  return err instanceof Error && /clos/i.test(err.message);
+}
+
+// Turn the worker's own log lines into plain progress messages.
+const PROGRESS: [RegExp, string][] = [
+  [/gateway/i, "Reaching the network gateway"],
+  [/consensus|directory|dirmgr/i, "Downloading the network map"],
+  [/bootstrap complete/i, "Network map ready. Building your route"],
+  [/guard/i, "Choosing relays"],
+  [/client ready|tor ready|ready/i, "Route built"],
+  [/mixnet|sphinx|gateway|connect/i, "Connecting to the mixnet"],
+];
+
+async function followProgress(w: AnonRpcWorkerType, gen: number) {
   try {
-    // The harness touches window and WebRTC, so load it only in the browser.
-    const { AnonRpcWorker } = await import("@anon-rpc/browser-harness");
-    const w = new AnonRpcWorker({
-      address: network.specifier,
-      config: network.config as never,
-      preExisting: {
-        rpcProvider: {
-          request: ({ method, params }) => bootstrapRequest(network.specifierChain, method, params),
-        },
-      },
-    });
-    worker = w;
-    workerNetwork = networkId;
-    await withTimeout(w.ready, 90_000, `${network.name} took too long to connect`);
-    setStatus({ phase: "ready", connectMs: Math.round(performance.now() - started) });
-    return w;
-  } catch (err) {
-    worker?.close();
-    worker = null;
-    workerNetwork = null;
-    setStatus({ phase: "failed", error: describeError(err, network.name) });
-    throw err;
+    for (;;) {
+      const { args } = await w.acceptLog();
+      if (gen !== generation || status.phase !== "connecting") continue;
+      const line = args.map((a) => (typeof a === "string" ? a : "")).join(" ");
+      const match = PROGRESS.find(([re]) => re.test(line));
+      if (match && match[1] !== status.progress) setStatus({ progress: match[1] });
+    }
+  } catch {
+    // The worker closed; nothing more to report.
   }
 }
 
+/** Drop the current route and build a fresh one (a new exit) on the same network. */
+export async function reconnect() {
+  const network = status.network;
+  disconnect();
+  return connect(network);
+}
+
+export class NoProviderAnswered extends Error {}
+
 export function disconnect() {
+  generation++;
+  inflight = null;
+  pendingWorker?.close();
+  pendingWorker = null;
   worker?.close();
   worker = null;
   workerNetwork = null;
@@ -208,19 +297,19 @@ export const sentCount = () => status.sent;
  * `isolationKey` keeps calls for different wallets unlinkable from each other
  * (on networks that support it).
  */
-export function privateClient(isolationKey: string): PublicClient {
+export function privateClient(isolationKey: string, opts: { avoid?: string } = {}): PublicClient {
   return createPublicClient({
     chain: mainnet,
     batch: { multicall: { batchSize: 4096, wait: 16 } },
     transport: custom(
       {
-      async request({ method, params }) {
-        const w = worker;
-        if (!w || status.phase !== "ready") {
-          throw new Error("The private connection isn't ready. Connect first.");
-        }
-        return sendWithRotation(w, method, params, isolationKey);
-      },
+        async request({ method, params }) {
+          const w = worker;
+          if (!w || status.phase !== "ready") {
+            throw new Error("The private connection isn't ready. Connect first.");
+          }
+          return sendWithRotation(w, method, params, isolationKey, opts.avoid);
+        },
       },
       // We already rotate providers ourselves; viem's own retries would only stack delays.
       { retryCount: 0 },
@@ -228,10 +317,26 @@ export function privateClient(isolationKey: string): PublicClient {
   }) as PublicClient;
 }
 
-async function sendWithRotation(w: AnonRpcWorkerType, method: string, params: unknown, isolationKey: string) {
+/** The provider that most recently answered requests on this private path. */
+export function providerOf(isolationKey: string) {
+  return status.reads.find((r) => r.ok && r.isolationKey === isolationKey)?.endpoint;
+}
+
+async function sendWithRotation(
+  w: AnonRpcWorkerType,
+  method: string,
+  params: unknown,
+  isolationKey: string,
+  avoid?: string,
+) {
+  // A cross-check client skips the provider that gave the first answer.
+  const candidates = MAINNET_RPCS.map((_, i) => MAINNET_RPCS[(endpointIndex + i) % MAINNET_RPCS.length]).filter(
+    (url) => new URL(url).host !== avoid,
+  );
   let lastError: unknown;
-  for (let attempt = 0; attempt < MAINNET_RPCS.length; attempt++) {
-    const endpoint = MAINNET_RPCS[endpointIndex % MAINNET_RPCS.length];
+  // Two providers in a row with no answer usually means the exit itself is dead,
+  // so give up quickly and let the caller build a fresh route instead.
+  for (const endpoint of candidates.slice(0, avoid ? 3 : 2)) {
     const started = performance.now();
     try {
       const res = await withTimeout(
@@ -254,10 +359,13 @@ async function sendWithRotation(w: AnonRpcWorkerType, method: string, params: un
       if (err instanceof RpcAnswerError) throw err;
       logRead(method, started, false, endpoint, isolationKey);
       lastError = err;
-      endpointIndex++;
+      if (!avoid) endpointIndex++;
     }
   }
-  throw lastError;
+  const why = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new NoProviderAnswered(
+    `No RPC provider answered through ${NETWORKS[status.network].name} (${why}). The private network may be busy. Scan again, or switch network.`,
+  );
 }
 
 class RpcAnswerError extends Error {}
