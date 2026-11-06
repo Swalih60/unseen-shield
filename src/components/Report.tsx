@@ -82,7 +82,7 @@ export function Report({ report }: { report: WalletReport }) {
         <svg viewBox="0 0 16 16" className="size-4 shrink-0 text-veil" aria-hidden>
           <path d="M8 1.5l5 2v4c0 3.2-2.2 5.8-5 7-2.8-1.2-5-3.8-5-7v-4l5-2z" fill="none" stroke="currentColor" strokeWidth="1.4" />
         </svg>
-        Checked {TOKENS.length} tokens against {SPENDERS.length} contracts in {report.reads} private {report.reads === 1 ? "request" : "requests"}. No provider saw this wallet next to your IP.
+        Checked {TOKENS.length} tokens against {SPENDERS.length} contracts on Ethereum in {report.reads} private {report.reads === 1 ? "request" : "requests"}. No provider saw this wallet next to your IP.
       </p>
 
       <CrossCheckLine report={report} />

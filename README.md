@@ -19,7 +19,7 @@ Built at ETHGlobal Mumbai for the Ethereum Foundation tracks *Best Use of Anon-R
    - **Worth reviewing:** unlimited approval on a token you hold
    - **Fine for now:** limited, or a token you don't hold
 4. **Revokes.** One click sets an approval back to zero through your own wallet.
-5. **Portfolio.** The same private requests also read your ETH and token balances plus Chainlink prices, so the Portfolio tab shows your total value, each asset and each wallet with no extra requests. Normal portfolio apps link all your wallets together for the provider; here each wallet takes its own path.
+5. **Portfolio across 6 chains.** The Portfolio tab shows your total value on Ethereum, Base, Arbitrum, Optimism, Polygon and BNB Chain: each chain's coin plus its major tokens, priced with Chainlink feeds read on-chain. That's one bundled private request per chain, on the wallet's own path. Normal portfolio apps link all your wallets together for their provider; here each wallet takes its own path. It counts only the assets we list: finding every token a wallet holds would need an indexing company, which would learn the wallet is yours.
 6. **Double-checks.** A second, independent provider, on its own private path, answers the same questions at the same block. If both agree, one dishonest provider can't fake a "safe" result. If they disagree, the report says so.
 7. **Shows its work.** The *What left this device* panel lists every request, which private path it took and which provider answered.
 8. **Leak lab.** Runs the same scan the ordinary way through a pretend provider, so you can watch it write down your IP, device and linked wallets. Unseen Shield's requests never reach it.
@@ -45,6 +45,7 @@ Built at ETHGlobal Mumbai for the Ethereum Foundation tracks *Best Use of Anon-R
 ## Honest limits
 
 - A **revoke is a public transaction.** Your wallet sends it, and every transaction on Ethereum is public. Only the checking is private.
+- The safety check covers **Ethereum only**; balances cover 6 chains.
 - It checks a **curated list** of tokens and contracts rather than every approval you ever made. That avoids sending your address to an indexer like Etherscan, which would defeat the purpose.
 - Answers are **double-checked by a second provider**, not cryptographically proven. Two providers would have to lie the same way to fool it. Light-client verification is the next step.
 - The public Tor gateway is the Anon-RPC demo gateway, which has limited capacity and can be slow to connect. That's why Nym is the default. Production use should run its own gateway.

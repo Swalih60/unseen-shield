@@ -12,6 +12,7 @@
 import { custom, createPublicClient, type PublicClient } from "viem";
 import { mainnet } from "viem/chains";
 import type { AnonRpcWorker as AnonRpcWorkerType } from "@anon-rpc/browser-harness";
+import type { OtherChain } from "./registry";
 
 export type NetworkId = "tor" | "nym" | "nox" | "passthrough";
 
@@ -130,7 +131,6 @@ export const anonStatus = {
 
 let worker: AnonRpcWorkerType | null = null;
 let workerNetwork: NetworkId | null = null;
-let endpointIndex = 0;
 let readCounter = 0;
 
 async function bootstrapRequest(chain: AnonNetwork["specifierChain"], method: string, params?: unknown[]) {
@@ -297,9 +297,12 @@ export const sentCount = () => status.sent;
  * `isolationKey` keeps calls for different wallets unlinkable from each other
  * (on networks that support it).
  */
-export function privateClient(isolationKey: string, opts: { avoid?: string } = {}): PublicClient {
+export function privateClient(isolationKey: string, opts: { avoid?: string; chain?: OtherChain } = {}): PublicClient {
+  const rotation: Rotation = opts.chain
+    ? { rpcs: opts.chain.rpcs, key: opts.chain.key }
+    : { rpcs: MAINNET_RPCS, key: "ethereum" };
   return createPublicClient({
-    chain: mainnet,
+    chain: opts.chain?.chain ?? mainnet,
     batch: { multicall: { batchSize: 4096, wait: 16 } },
     transport: custom(
       {
@@ -308,7 +311,7 @@ export function privateClient(isolationKey: string, opts: { avoid?: string } = {
           if (!w || status.phase !== "ready") {
             throw new Error("The private connection isn't ready. Connect first.");
           }
-          return sendWithRotation(w, method, params, isolationKey, opts.avoid);
+          return sendWithRotation(w, method, params, isolationKey, rotation, opts.avoid);
         },
       },
       // We already rotate providers ourselves; viem's own retries would only stack delays.
@@ -322,17 +325,22 @@ export function providerOf(isolationKey: string) {
   return status.reads.find((r) => r.ok && r.isolationKey === isolationKey)?.endpoint;
 }
 
+type Rotation = { rpcs: string[]; key: string };
+// Which provider each chain starts with; it moves on when one stops answering.
+const startIndex = new Map<string, number>();
+
 async function sendWithRotation(
   w: AnonRpcWorkerType,
   method: string,
   params: unknown,
   isolationKey: string,
+  rotation: Rotation,
   avoid?: string,
 ) {
+  const { rpcs, key } = rotation;
+  const first = startIndex.get(key) ?? 0;
   // A cross-check client skips the provider that gave the first answer.
-  const candidates = MAINNET_RPCS.map((_, i) => MAINNET_RPCS[(endpointIndex + i) % MAINNET_RPCS.length]).filter(
-    (url) => new URL(url).host !== avoid,
-  );
+  const candidates = rpcs.map((_, i) => rpcs[(first + i) % rpcs.length]).filter((url) => new URL(url).host !== avoid);
   let lastError: unknown;
   // Two providers in a row with no answer usually means the exit itself is dead,
   // so give up quickly and let the caller build a fresh route instead.
@@ -359,7 +367,7 @@ async function sendWithRotation(
       if (err instanceof RpcAnswerError) throw err;
       logRead(method, started, false, endpoint, isolationKey);
       lastError = err;
-      if (!avoid) endpointIndex++;
+      if (!avoid) startIndex.set(key, (startIndex.get(key) ?? 0) + 1);
     }
   }
   const why = lastError instanceof Error ? lastError.message : String(lastError);

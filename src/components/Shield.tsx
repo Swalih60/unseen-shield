@@ -79,6 +79,8 @@ export function Shield() {
           makeClient: (avoid) => {
             return { client: privateClient(checkKey, { avoid }), key: checkKey };
           },
+          // Same path as the wallet's main scan, so other chains don't link it to anything new.
+          chainClient: (chain) => privateClient(mainKey, { chain }),
         });
       }),
     );

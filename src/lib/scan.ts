@@ -5,9 +5,27 @@
 // requests instead of hundreds. That matters when every request travels
 // through a slow anonymizing network.
 
-import { erc20Abi, formatUnits, isAddress, getAddress, type Address, type PublicClient } from "viem";
+import {
+  erc20Abi,
+  formatUnits,
+  getAddress,
+  isAddress,
+  type Address,
+  type ContractFunctionParameters,
+  type PublicClient,
+} from "viem";
 import { normalize } from "viem/ens";
-import { PERMIT2, PRICE_FEEDS, SPENDERS, TOKENS, type Spender, type Token } from "./registry";
+import {
+  OTHER_CHAINS,
+  PERMIT2,
+  PRICE_FEEDS,
+  SPENDERS,
+  TOKENS,
+  type OtherChain,
+  type PriceKind,
+  type Spender,
+  type Token,
+} from "./registry";
 
 const permit2Abi = [
   {
@@ -75,9 +93,12 @@ export type Approval = {
 
 // A second, independent provider answers the same questions at the same block.
 // If both agree, one dishonest provider can't fake a "safe" result.
-export type CrossCheck = { state: "agreed"; providers: string[] } | { state: "disagreed"; providers: string[] } | { state: "skipped"; reason: string };
+export type CrossCheck =
+  | { state: "agreed"; providers: string[] }
+  | { state: "disagreed"; providers: string[] }
+  | { state: "skipped"; reason: string };
 
-export type Holding = { symbol: string; name: string; amount: number; usd: number | null };
+export type Holding = { symbol: string; name: string; chain: string; amount: number; usd: number | null };
 
 export type WalletReport = {
   input: string;
@@ -87,6 +108,8 @@ export type WalletReport = {
   // Everything this wallet holds among the assets we check, read in the same private requests.
   holdings: Holding[];
   holdingsUsd: number;
+  // Chains whose balances couldn't be read this time (the rest of the report still stands).
+  chainsMissed: string[];
   approvals: Approval[];
   exposedUsd: number;
   score: number;
@@ -98,7 +121,10 @@ export type WalletReport = {
 // Anything at or above 2^96 base units is effectively "everything you'll ever hold".
 const UNLIMITED = 2n ** 96n;
 
-export async function resolveWallet(client: PublicClient, input: string): Promise<{ address: Address; ensName?: string }> {
+export async function resolveWallet(
+  client: PublicClient,
+  input: string,
+): Promise<{ address: Address; ensName?: string }> {
   const value = input.trim();
   if (isAddress(value)) return { address: getAddress(value) };
   if (value.includes(".")) {
@@ -115,6 +141,8 @@ type CrossCheckOptions = {
   mainKey: string;
   // A second private client on its own path that avoids the given provider.
   makeClient: (avoid: string | undefined) => { client: PublicClient; key: string };
+  // A private client for another chain, on this wallet's own path.
+  chainClient?: (chain: OtherChain) => PublicClient;
 };
 
 export async function scanWallet(
@@ -152,8 +180,7 @@ export async function scanWallet(
       functionName: "balanceOf" as const,
       args: [owner] as const,
     })),
-    { address: PRICE_FEEDS.eth, abi: feedAbi, functionName: "latestRoundData" as const },
-    { address: PRICE_FEEDS.btc, abi: feedAbi, functionName: "latestRoundData" as const },
+    ...FEED_KEYS.map((k) => ({ address: PRICE_FEEDS[k], abi: feedAbi, functionName: "latestRoundData" as const })),
   ];
 
   // Read at a fixed block, a couple behind the tip, so a second provider can answer the exact same question.
@@ -162,6 +189,15 @@ export async function scanWallet(
     client.multicall({ contracts, allowFailure: true, blockNumber, batchSize: 64_000 }),
     client.getBalance({ address: owner, blockNumber }),
   ]);
+
+  // Prices come from the same bundled request, so read them first: other chains need them too.
+  const feedResults = results.slice(results.length - FEED_KEYS.length);
+  const prices = readPrices(feedResults);
+
+  // Balances on other chains are read while the double-check runs.
+  const otherChains = verify?.chainClient
+    ? readOtherChains(owner, verify.chainClient, prices)
+    : Promise.resolve({ holdings: [] as Holding[], missed: [] as string[] });
 
   let crossCheck: CrossCheck = { state: "skipped", reason: "Not requested" };
   if (verify) {
@@ -190,22 +226,27 @@ export async function scanWallet(
     const r = results[i++];
     balances.set(token.address, r.status === "success" ? (r.result as bigint) : 0n);
   }
-  const ethUsd = feedPrice(results[i++]);
-  const btcUsd = feedPrice(results[i++]);
-  const priceOf = (t: Token) => (t.price === "usd" ? 1 : t.price === "eth" ? ethUsd : t.price === "btc" ? btcUsd : null);
+  const priceOf = (t: Token) => priceFor(t.price, prices);
 
   const holdings: Holding[] = [];
   if (ethBalance > 0n) {
     const amount = Number(formatUnits(ethBalance, 18));
-    holdings.push({ symbol: "ETH", name: "Ether", amount, usd: ethUsd === null ? null : amount * ethUsd });
+    holdings.push({ symbol: "ETH", name: "Ether", chain: "Ethereum", amount, usd: usdOf(amount, prices.eth) });
   }
   for (const token of TOKENS) {
     const raw = balances.get(token.address) ?? 0n;
     if (raw === 0n) continue;
     const amount = Number(formatUnits(raw, token.decimals));
-    const price = priceOf(token);
-    holdings.push({ symbol: token.symbol, name: token.name, amount, usd: price === null ? null : amount * price });
+    holdings.push({
+      symbol: token.symbol,
+      name: token.name,
+      chain: "Ethereum",
+      amount,
+      usd: usdOf(amount, priceOf(token)),
+    });
   }
+  const elsewhere = await otherChains;
+  holdings.push(...elsewhere.holdings);
   holdings.sort((a, b) => (b.usd ?? -1) - (a.usd ?? -1));
 
   const now = Math.floor(Date.now() / 1000);
@@ -264,6 +305,7 @@ export async function scanWallet(
     ethBalance,
     holdings,
     holdingsUsd: holdings.reduce((sum, h) => sum + (h.usd ?? 0), 0),
+    chainsMissed: elsewhere.missed,
     approvals,
     exposedUsd,
     score: scoreOf(approvals),
@@ -273,7 +315,12 @@ export async function scanWallet(
   };
 }
 
-function judge(token: Token, spender: Spender, unlimited: boolean, balance: bigint): { severity: Severity; reason: string } {
+function judge(
+  token: Token,
+  spender: Spender,
+  unlimited: boolean,
+  balance: bigint,
+): { severity: Severity; reason: string } {
   if (spender.kind === "exploited") {
     return {
       severity: "critical",
@@ -303,7 +350,10 @@ function scoreOf(approvals: Approval[]) {
 
 // Compare only answers both providers actually gave. A free provider refusing a
 // call (rate or gas limits) is not a disagreement; a different number is.
-function compare(a: readonly { status: string; result?: unknown }[], b: readonly { status: string; result?: unknown }[]) {
+function compare(
+  a: readonly { status: string; result?: unknown }[],
+  b: readonly { status: string; result?: unknown }[],
+) {
   const text = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
   let compared = 0;
   let mismatched = 0;
@@ -315,6 +365,96 @@ function compare(a: readonly { status: string; result?: unknown }[], b: readonly
   });
   return { compared, mismatched };
 }
+
+const FEED_KEYS = Object.keys(PRICE_FEEDS) as (keyof typeof PRICE_FEEDS)[];
+type Prices = Record<keyof typeof PRICE_FEEDS, number | null>;
+
+function readPrices(feedResults: readonly { status: string; result?: unknown }[]): Prices {
+  const raw = Object.fromEntries(FEED_KEYS.map((k, j) => [k, feedPrice(feedResults[j])])) as Prices;
+  // The SHIB feed is priced in ETH with 18 decimals; feedPrice assumed USD with 8.
+  if (raw.shib !== null) raw.shib = raw.eth === null ? null : (raw.shib / 1e10) * raw.eth;
+  return raw;
+}
+
+function priceFor(kind: PriceKind, prices: Prices): number | null {
+  if (kind === "usd") return 1;
+  if (kind === "none") return null;
+  return prices[kind];
+}
+
+function usdOf(amount: number, price: number | null) {
+  return price === null ? null : amount * price;
+}
+
+const multicall3Abi = [
+  {
+    type: "function",
+    name: "getEthBalance",
+    stateMutability: "view",
+    inputs: [{ name: "addr", type: "address" }],
+    outputs: [{ name: "balance", type: "uint256" }],
+  },
+] as const;
+
+// One bundled request per chain: the native coin plus each token we list there.
+async function readOtherChains(owner: Address, clientFor: (c: OtherChain) => PublicClient, prices: Prices) {
+  const settled = await Promise.allSettled(
+    OTHER_CHAINS.map(async (c) => {
+      const client = clientFor(c);
+      const contracts: ContractFunctionParameters[] = [
+        {
+          address: MULTICALL3,
+          abi: multicall3Abi,
+          functionName: "getEthBalance" as const,
+          args: [owner] as const,
+        },
+        ...c.tokens.map((t) => ({
+          address: t.address,
+          abi: erc20Abi,
+          functionName: "balanceOf" as const,
+          args: [owner] as const,
+        })),
+      ];
+      const results = await client.multicall({ allowFailure: true, batchSize: 64_000, contracts });
+      if (results.every((r) => r.status !== "success")) throw new Error(`${c.name} didn't answer`);
+      const out: Holding[] = [];
+      const native = results[0].status === "success" ? (results[0].result as bigint) : 0n;
+      if (native > 0n) {
+        const amount = Number(formatUnits(native, 18));
+        out.push({
+          symbol: c.native.symbol,
+          name: c.native.name,
+          chain: c.name,
+          amount,
+          usd: usdOf(amount, priceFor(c.native.price, prices)),
+        });
+      }
+      c.tokens.forEach((t, j) => {
+        const r = results[j + 1];
+        const raw = r.status === "success" ? (r.result as bigint) : 0n;
+        if (raw === 0n) return;
+        const amount = Number(formatUnits(raw, t.decimals));
+        out.push({
+          symbol: t.symbol,
+          name: t.name,
+          chain: c.name,
+          amount,
+          usd: usdOf(amount, priceFor(t.price, prices)),
+        });
+      });
+      return out;
+    }),
+  );
+  const holdings: Holding[] = [];
+  const missed: string[] = [];
+  settled.forEach((r, j) => {
+    if (r.status === "fulfilled") holdings.push(...r.value);
+    else missed.push(OTHER_CHAINS[j].name);
+  });
+  return { holdings, missed };
+}
+
+const MULTICALL3: Address = "0xcA11bde05977b3631167028862bE2a173976CA11";
 
 function feedPrice(r: { status: string; result?: unknown }): number | null {
   if (r.status !== "success") return null;
