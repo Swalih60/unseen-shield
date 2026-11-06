@@ -185,10 +185,31 @@ export async function scanWallet(
 
   // Read at a fixed block, a couple behind the tip, so a second provider can answer the exact same question.
   const blockNumber = (await client.getBlockNumber()) - 2n;
-  const [results, ethBalance] = await Promise.all([
+  const [firstResults, ethBalance] = await Promise.all([
     client.multicall({ contracts, allowFailure: true, blockNumber, batchSize: 64_000 }),
     client.getBalance({ address: owner, blockNumber }),
   ]);
+  let results = firstResults;
+
+  // A failed check must never read as "no approval". If too many approval checks
+  // came back unanswered, ask a different provider; if that fails too, stop.
+  const approvalCalls = directPairs.length + permit2Pairs.length;
+  const answered = (rs: readonly { status: string }[]) =>
+    rs.slice(0, approvalCalls).filter((r) => r.status === "success").length;
+  if (answered(results) < approvalCalls * 0.9 && verify) {
+    try {
+      const alt = verify.makeClient(verify.providerOf(verify.mainKey));
+      const again = await alt.client.multicall({ contracts, allowFailure: true, blockNumber, batchSize: 64_000 });
+      if (answered(again) > answered(results)) results = again;
+    } catch {
+      // fall through to the check below
+    }
+  }
+  if (answered(results) < approvalCalls * 0.9) {
+    throw new Error(
+      `Only ${answered(results)} of ${approvalCalls} approval checks were answered, so this result can't be trusted yet. Check again.`,
+    );
+  }
 
   // Prices come from the same bundled request, so read them first: other chains need them too.
   const feedResults = results.slice(results.length - FEED_KEYS.length);
