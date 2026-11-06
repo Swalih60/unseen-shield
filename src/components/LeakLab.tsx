@@ -55,8 +55,9 @@ export function LeakLab({ wallets }: { wallets: string[] }) {
         See what a normal checker gives away
       </h2>
       <p className="mt-3 max-w-[62ch] text-fog">
-        On the left, the same scan goes through an ordinary connection to a pretend provider that writes down
-        what any RPC provider can see. On the right is what it learned from Unseen Shield.
+        The same check, done two ways. The normal way goes through an ordinary connection to a pretend provider
+        that writes down what any RPC provider can see. Next to it is what that provider learned from Unseen
+        Shield.
       </p>
 
       <div className="mt-8 grid gap-5 lg:grid-cols-2">
@@ -78,7 +79,7 @@ export function LeakLab({ wallets }: { wallets: string[] }) {
               )}
             </div>
           </div>
-          {wallets.length === 0 && <p className="mt-3 text-sm text-fog">Add a wallet on the Scan tab first.</p>}
+          {wallets.length === 0 && <p className="mt-3 text-sm text-fog">Check a wallet first, then come back to compare.</p>}
           {error && <p className="mt-3 text-sm text-flare">{error}</p>}
 
           <dl className="mt-6 grid gap-4">
@@ -93,7 +94,7 @@ export function LeakLab({ wallets }: { wallets: string[] }) {
             <Seen term="Requests written down" value={String(notes.length)} bad={notes.length > 0} />
           </dl>
           {linked.length > 1 && (
-            <p className="mt-6 rounded-2xl border border-flare/40 bg-night/60 p-4 text-[15px] leading-relaxed">
+            <p className="mt-6 text-[15px] leading-relaxed text-mist">
               The provider now knows these {linked.length} wallets belong to one person, on a {latest?.device}. It
               didn&apos;t need to hack anything. The checker told it.
             </p>
@@ -108,7 +109,7 @@ export function LeakLab({ wallets }: { wallets: string[] }) {
             <Seen term="Wallets it can link together" value="None. Each wallet took its own path." />
             <Seen term="Private requests sent" value={String(anon.sent)} />
           </dl>
-          <p className="mt-6 rounded-2xl border border-veil/30 bg-night/60 p-4 text-[15px] leading-relaxed">
+          <p className="mt-6 text-[15px] leading-relaxed text-mist">
             Your private scans never touched this provider. The RPC providers that did answer them only saw a
             relay&apos;s address, never yours.
           </p>

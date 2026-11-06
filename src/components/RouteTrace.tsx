@@ -29,7 +29,7 @@ function stopsFor(networkId: keyof typeof NETWORKS): Stop[] {
   ];
 }
 
-export function RouteTrace() {
+export function RouteTrace({ vertical = false }: { vertical?: boolean }) {
   const anon = useAnon();
   const reduce = useReducedMotion();
   const stops = stopsFor(anon.network);
@@ -39,15 +39,18 @@ export function RouteTrace() {
 
   const built = anon.phase === "ready";
   const building = anon.phase === "connecting";
+  // Horizontal from md up, unless the caller wants the vertical layout everywhere.
+  const h = (cls: string) => (vertical ? "" : cls);
+  const track = `absolute left-[11px] top-3 bottom-3 w-px ${h("md:left-[var(--inset)] md:right-[var(--inset)] md:top-[11px] md:bottom-auto md:h-px md:w-auto")}`;
 
   return (
     <figure aria-label="How your request travels" className="relative">
-      <div role="list" className="relative grid gap-5 md:grid-cols-[repeat(var(--n),minmax(0,1fr))] md:gap-3" style={{ ["--n" as string]: stops.length, ["--inset" as string]: `${50 / stops.length}%` }}>
+      <div role="list" className={`relative grid gap-6 ${h("md:grid-cols-[repeat(var(--n),minmax(0,1fr))] md:gap-3")}`} style={{ ["--n" as string]: stops.length, ["--inset" as string]: `${50 / stops.length}%` }}>
         {/* The track */}
-        <div aria-hidden className="absolute left-[11px] top-3 bottom-3 w-px bg-line md:left-[var(--inset)] md:right-[var(--inset)] md:top-[11px] md:bottom-auto md:h-px md:w-auto" />
+        <div aria-hidden className={`${track} bg-line`} />
         <motion.div
           aria-hidden
-          className="absolute left-[11px] top-3 bottom-3 w-px bg-veil md:left-[var(--inset)] md:right-[var(--inset)] md:top-[11px] md:bottom-auto md:h-px md:w-auto"
+          className={`${track} bg-veil`}
           initial={false}
           animate={{ opacity: built ? 0.6 : 0 }}
           transition={{ duration: 0.6 }}
@@ -58,10 +61,14 @@ export function RouteTrace() {
             <motion.span
               key={pulse}
               aria-hidden
-              className="absolute z-10 hidden size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-veil shadow-[0_0_16px_4px_rgb(166_230_212/0.55)] md:block"
-              style={{ top: 11.5 }}
-              initial={{ left: `${50 / stops.length}%`, opacity: 0 }}
-              animate={{ left: `${100 - 50 / stops.length}%`, opacity: [0, 1, 1, 0] }}
+              className={`absolute z-10 size-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-veil shadow-[0_2px_14px_2px_rgb(166_230_212/0.5)] ${vertical ? "" : "hidden md:block"}`}
+              style={vertical ? { left: 12 } : { top: 11.5 }}
+              initial={vertical ? { top: 12, opacity: 0 } : { left: `${50 / stops.length}%`, opacity: 0 }}
+              animate={
+                vertical
+                  ? { top: "calc(100% - 12px)", opacity: [0, 1, 1, 0] }
+                  : { left: `${100 - 50 / stops.length}%`, opacity: [0, 1, 1, 0] }
+              }
               exit={{ opacity: 0 }}
               transition={{ duration: 1.2, ease: [0.4, 0, 0.2, 1] }}
             />
@@ -71,7 +78,7 @@ export function RouteTrace() {
         {stops.map((stop, i) => {
           const lit = built || (building && i === 0);
           return (
-            <div role="listitem" key={stop.title} className="relative flex gap-4 md:flex-col md:items-center md:gap-3 md:text-center">
+            <div role="listitem" key={stop.title} className={`relative flex gap-4 ${h("md:flex-col md:items-center md:gap-3 md:text-center")}`}>
               <motion.span
                 aria-hidden
                 className="relative z-[1] grid size-6 shrink-0 place-items-center rounded-full border bg-night"
@@ -90,7 +97,7 @@ export function RouteTrace() {
               </motion.span>
               <div className="min-w-0">
                 <p className="font-display text-[15px] font-semibold leading-tight text-mist">{stop.title}</p>
-                <p className="mt-1 text-[13px] leading-snug text-fog md:mx-auto md:max-w-[15ch]">{stop.knows}</p>
+                <p className={`mt-1 text-[13px] leading-snug text-fog ${h("md:mx-auto md:max-w-[15ch]")}`}>{stop.knows}</p>
               </div>
             </div>
           );
