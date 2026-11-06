@@ -5,6 +5,7 @@
 // are and what you asked.
 
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import { NETWORKS } from "@/lib/anon";
 import { useAnon } from "./useAnon";
 
@@ -41,20 +42,36 @@ export function RouteTrace({ vertical = false }: { vertical?: boolean }) {
   const building = anon.phase === "connecting";
   // Horizontal from md up, unless the caller wants the vertical layout everywhere.
   const h = (cls: string) => (vertical ? "" : cls);
-  const track = `absolute left-[11px] top-3 bottom-3 w-px ${h("md:left-[var(--inset)] md:right-[var(--inset)] md:top-[11px] md:bottom-auto md:h-px md:w-auto")}`;
+  // The horizontal track runs between the first and last dot centres (md and up only).
+  const track = "absolute hidden md:block md:left-[var(--inset)] md:right-[var(--inset)] md:top-[11px] md:h-px";
+
+  // Where the last dot sits, so the travelling dot stops exactly there.
+  const lastStop = useRef<HTMLDivElement>(null);
+  const [endTop, setEndTop] = useState(0);
+  useEffect(() => {
+    const el = lastStop.current;
+    if (!el) return;
+    const measure = () => setEndTop(el.offsetTop + 12);
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [stops.length]);
 
   return (
     <figure aria-label="How your request travels" className="relative">
       <div role="list" className={`relative grid gap-6 ${h("md:grid-cols-[repeat(var(--n),minmax(0,1fr))] md:gap-3")}`} style={{ ["--n" as string]: stops.length, ["--inset" as string]: `${50 / stops.length}%` }}>
-        {/* The track */}
-        <div aria-hidden className={`${track} bg-line`} />
-        <motion.div
-          aria-hidden
-          className={`${track} bg-veil`}
-          initial={false}
-          animate={{ opacity: built ? 0.6 : 0 }}
-          transition={{ duration: 0.6 }}
-        />
+        {!vertical && (
+          <>
+            <div aria-hidden className={`${track} bg-line`} />
+            <motion.div
+              aria-hidden
+              className={`${track} bg-veil`}
+              initial={false}
+              animate={{ opacity: built ? 0.6 : 0 }}
+              transition={{ duration: 0.6 }}
+            />
+          </>
+        )}
 
         <AnimatePresence>
           {pulse !== null && (
@@ -66,7 +83,7 @@ export function RouteTrace({ vertical = false }: { vertical?: boolean }) {
               initial={vertical ? { top: 12, opacity: 0 } : { left: `${50 / stops.length}%`, opacity: 0 }}
               animate={
                 vertical
-                  ? { top: "calc(100% - 12px)", opacity: [0, 1, 1, 0] }
+                  ? { top: endTop || "calc(100% - 12px)", opacity: [0, 1, 1, 0] }
                   : { left: `${100 - 50 / stops.length}%`, opacity: [0, 1, 1, 0] }
               }
               exit={{ opacity: 0 }}
@@ -78,7 +95,21 @@ export function RouteTrace({ vertical = false }: { vertical?: boolean }) {
         {stops.map((stop, i) => {
           const lit = built || (building && i === 0);
           return (
-            <div role="listitem" key={stop.title} className={`relative flex gap-4 ${h("md:flex-col md:items-center md:gap-3 md:text-center")}`}>
+            <div
+              role="listitem"
+              key={stop.title}
+              ref={i === stops.length - 1 ? lastStop : undefined}
+              className={`relative flex gap-4 ${h("md:flex-col md:items-center md:gap-3 md:text-center")}`}
+            >
+              {/* Vertical layout: a short segment from this dot down to the next one, none after the last. */}
+              {i < stops.length - 1 && (
+                <span
+                  aria-hidden
+                  className={`absolute left-[11px] top-6 -bottom-6 w-px transition-colors duration-500 ${
+                    built ? "bg-veil/60" : "bg-line"
+                  } ${h("md:hidden")}`}
+                />
+              )}
               <motion.span
                 aria-hidden
                 className="relative z-[1] grid size-6 shrink-0 place-items-center rounded-full border bg-night"
