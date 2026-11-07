@@ -1,69 +1,116 @@
 # Unseen Shield
 
-**Find what can drain your wallet, and see everything you hold, without telling anyone the wallets are yours.**
+**Check whether your wallet can be drained, and what it holds, without anyone learning the wallet is yours.**
 
-Old token approvals let apps spend your tokens forever. If one of those contracts is hacked, attackers drain wallets through approvals people forgot about: LI.FI lost about $10M this way in July 2024, Socket about $3.3M in January 2024.
+- **Live app:** https://unseen-shield-two.vercel.app
+- **Built at:** ETHGlobal Mumbai, for the Ethereum Foundation's **Best Use of Anon-RPC** and **Best CROPS App** tracks
 
-Checking your approvals today means pasting your wallet into a site whose servers and RPC provider see your wallet next to your IP address. You reveal exactly which wallet is yours, and that it might be vulnerable.
+---
 
-Unseen Shield scans approvals **entirely in your browser**, and **every request goes through [Anon-RPC](https://github.com/ethereum/anon-rpc)** (Tor, Nym or Nox), so no provider learns who is asking.
+## The problem
 
-Built at ETHGlobal Mumbai for the Ethereum Foundation tracks *Best Use of Anon-RPC* and *Best CROPS App*.
+Every time you use a crypto app you give it an **approval** to spend your tokens, usually unlimited and forever. When one of those contracts is exploited, attackers drain every wallet that ever approved it: LI.FI (July 2024, about $11M), Socket (January 2024, about $3.3M), and [70 more](https://github.com/RevokeCash/allowance-exploit-list).
 
-## What it does
+Checking your approvals today means asking someone's server. Approval checkers, indexers and RPC providers see **your wallet next to your IP address**. You end up telling a stranger *"this wallet is mine, and it might be vulnerable"*, which is exactly what an attacker wants to know.
 
-1. **Connects privately.** On page load it starts an Anon-RPC worker in the background (Nym by default, which connects in about 10 to 20 seconds). You can switch to Nox. While it connects, it shows what the network is doing. Tor support is built in but hidden from the picker for now, because the public tor-js demo gateway was too overloaded to connect reliably.
-2. **Scans.** For each wallet you add (address or ENS name), it checks 11 popular tokens against 13 commonly approved contracts, including Permit2 sub-approvals. It also reads balances and Chainlink prices so it can show how much money is exposed.
-3. **Judges.** Each approval is labeled:
-   - **Revoke now:** the contract was drained through approvals (LI.FI Diamond, Socket Gateway)
-   - **Worth reviewing:** unlimited approval on a token you hold
-   - **Fine for now:** limited, or a token you don't hold
-4. **Revokes.** One click sets an approval back to zero through your own wallet.
-5. **Portfolio across 6 chains.** The Portfolio tab shows your total value on Ethereum, Base, Arbitrum, Optimism, Polygon and BNB Chain: each chain's coin plus its major tokens, priced with Chainlink feeds read on-chain. That's one bundled private request per chain, on the wallet's own path. Normal portfolio apps link all your wallets together for their provider; here each wallet takes its own path. It counts only the assets we list: finding every token a wallet holds would need an indexing company, which would learn the wallet is yours.
-6. **Double-checks.** A second, independent provider, on its own private path, answers the same questions at the same block. If both agree, one dishonest provider can't fake a "safe" result. If they disagree, the report says so.
-7. **Shows its work.** The *What left this device* panel lists every request, which private path it took and which provider answered.
-8. **Leak lab.** Runs the same scan the ordinary way through a pretend provider, so you can watch it write down your IP, device and linked wallets. Unseen Shield's requests never reach it.
+**Security tools shouldn't make you less safe.**
+
+## What Unseen Shield does
+
+Type an address or ENS name and press **Check privately**. One report, three sections:
+
+- **Approvals:** which contracts can still spend your tokens. 🔴 contracts that were drained through approvals, 🟠 unlimited approvals on tokens you hold, ⚪ everything else. **Revoke** sets an approval back to zero from your own wallet.
+- **Holdings:** your coins and major tokens on Ethereum, Base, Arbitrum, Optimism, Polygon and BNB Chain, priced with Chainlink feeds read on-chain.
+- **Privacy receipt:** the route your check took, proof that two independent providers gave identical answers, and every request that left your device.
+
+A **Compare** page runs the same check the normal way, so you can watch a provider log your device and link your wallets, while Unseen Shield's requests never reach it.
+
+---
 
 ## How Anon-RPC is used
 
-- `src/lib/anon.ts` wraps `@anon-rpc/browser-harness` in a viem `custom` transport. Every read, including ENS resolution, goes through `worker.fetch`.
-- **100% of scan traffic is private.** There is no silent fallback to a direct connection. If the private network fails, scanning stops and says so.
-- **Per-wallet isolation.** Each wallet's scan uses its own `anonOptions.isolationKey`, so its requests can't be linked to another wallet's (on networks that support it).
-- **Few requests.** Everything is bundled into a single Multicall, so a full scan plus its double-check is about 5 requests, which matters on a slow anonymizing network.
-- **Provider rotation.** Some RPC providers stall on traffic from Tor or Nym exits. Requests rotate through PublicNode, MEV Blocker, Blast API, 1RPC and dRPC, still over the private network.
-- **Fresh route on failure.** If two providers in a row don't answer, the exit node is probably dead, so the app builds a new route and scans once more.
-- **Clean switching.** Switching networks closes any connection still being built, so networks never compete for bandwidth.
-- The bootstrap read of the worker's specifier contract is the only direct request. It reveals only that someone is reading the Anon-RPC specifier, nothing about any wallet.
+**Every blockchain read the app makes goes through Anon-RPC, by default, with no direct fallback.**
+
+| | |
+|---|---|
+| Library | `@anon-rpc/browser-harness` 0.4.0, wrapped in a viem `custom` transport (`src/lib/anon.ts`) |
+| Networks | **Nym** (default) and **Nox**, both selectable. Tor (`tor-js`) is supported in code but hidden: its public demo gateway was too overloaded to connect reliably during the event. |
+| Traffic through Anon-RPC | **100% of wallet reads**: approvals, balances, prices and ENS resolution, on all six chains, plus the double-check |
+| Disclosed exception | The harness's bootstrap read of the network's specifier contract (`eth_call` to the specifier). It reveals only that someone loads that worker; it carries no wallet data. |
+| Worker integrity | The harness verifies the worker bundle's keccak256 against the specifier before running it in a null-origin sandboxed iframe with no access to the page, storage or keys |
+
+**What we built on top of the harness:**
+
+- **Per-wallet isolation keys.** Each wallet's requests carry their own `anonOptions.isolationKey`, so checking several wallets doesn't link them, even for the mixnet. The second-opinion reads use a separate key again.
+- **Few requests.** Each Ethereum scan is about 160 read-only calls (`allowance`, Permit2 `allowance`, `balanceOf`, Chainlink `latestRoundData`) bundled with Multicall3 into one request, plus one small bundle per other chain, which matters on a slow mixnet.
+- **Fail closed.** If too many approval checks come back unanswered, the app retries with another provider and otherwise shows an error. **It never reports "safe" without the data.** It never falls back to a direct connection.
+- **Self-healing routes.** Providers that stall on mixnet traffic are rotated (PublicNode, MEV Blocker, Blast API, 1RPC, dRPC). Two failures in a row rebuild the route (a fresh exit) and scan again. Switching networks shuts down the previous connection immediately.
+- **Two-provider cross-check.** A second provider, on its own private path, answers the same bundle at the same block. Matching answers are shown as double-checked; a mismatch warns the user.
+- **Fast first check.** The private connection starts in the background as soon as the page opens, retries once on its own, and shows what the network is doing while it connects.
+- **Visible proof.** The privacy receipt lists every request (time, path, provider, latency). Nothing is hidden behind "trust us".
+
+---
 
 ## CROPS
 
-- **Censorship resistance:** No accounts, no backend for scanning, and no dependency on a single RPC provider. Requests rotate across providers over Tor, Nym or Nox, and the scan works from any static host.
-- **Open source:** MIT licensed. The scanning rules (tokens, contracts, risk labels) are plain data in `src/lib/registry.ts` that anyone can check.
-- **Privacy (the reason it exists):** Wallets are checked through Anon-RPC, so no provider sees your IP next to your wallet. Wallets are kept unlinkable from each other with isolation keys. Your wallet list stays in this browser's localStorage, optional and never uploaded. No trackers, no analytics, and fonts are self-hosted.
-- **Security:** Finds approvals that can drain you, flags contracts with a known exploit history, and revokes them. Nothing is signed except the revoke you choose. The Anon-RPC worker runs hash-pinned in a sandboxed iframe with no access to the page.
+**Lead property: Privacy.** It is structural, not a setting: every read goes through Anon-RPC by default, and there is no direct path to fall back to.
+
+- **C, Censorship resistance (control and dependencies):** No accounts, API keys or backend in the scanning path; providers are rotated when one refuses. We depend on the mixnets (Nym, Nox), public RPC providers, the CDN serving the mixnet client, and Vercel for hosting; the app also runs locally from this repo without any service of ours.
+- **O, Open source (licensing and buildability):** MIT licensed; builds with `npm install && npm run build`. The scanning rules (tokens, contracts, risk labels) are plain data in `src/lib/registry.ts` that anyone can audit.
+- **P, Privacy (what third parties learn):** RPC providers learn which wallet was queried, but not the IP and not that a user's wallets belong together (per-wallet isolation keys). The only direct request is Anon-RPC's bootstrap specifier read, which carries no wallet data; details below.
+- **S, Security (keys and data):** No keys, signatures or approvals are requested, and there is no smart contract; Revoke sends `approve(spender, 0)` from the user's own wallet. The wallet list stays in the browser's localStorage only if the user opts in, and no trackers or analytics are included.
+
+### What each third party learns
+
+| Who | Learns | Doesn't learn |
+|---|---|---|
+| RPC providers | That some wallet was queried | Your IP, or that your wallets belong together |
+| Mixnet nodes | Encrypted traffic; the entry node sees your IP | What you asked |
+| Second-opinion provider | The same public reads | Who asked, or the link to the first path |
+| Bootstrap RPC | That someone loaded the Anon-RPC worker | Any wallet |
+| CDN (mixnet client) and Vercel (site) | That someone opened the app | Any wallet |
+| Us | Nothing: no server sees scans | |
+
+Fonts are bundled at build time.
+
+---
+
+## What gets checked
+
+- **Approvals on Ethereum:** 11 tokens (USDC, USDT, DAI, WETH, stETH, WBTC, LINK, UNI, AAVE, SHIB, PEPE) against 13 contracts: 11 commonly approved ones (Permit2, Uniswap routers including the Universal Router via Permit2, 1inch, 0x, SushiSwap, Aave V3, OpenSea) and 2 that were drained through approvals (LI.FI Diamond, July 2024; Socket Gateway, January 2024), with addresses checked against public incident reports.
+- **Balances on six chains:** Ethereum, Base, Arbitrum, Optimism, Polygon and BNB Chain, each chain's coin plus USDC/USDT/WETH, with every address verified on-chain.
+- **Prices:** Chainlink feeds for ETH, BTC, LINK, UNI, AAVE, SHIB, BNB and POL, read on-chain inside the same private requests. No price API.
 
 ## Honest limits
 
-- A **revoke is a public transaction.** Your wallet sends it, and every transaction on Ethereum is public. Only the checking is private.
-- The safety check covers **Ethereum only**; balances cover 6 chains.
-- It checks a **curated list** of tokens and contracts rather than every approval you ever made. That avoids sending your address to an indexer like Etherscan, which would defeat the purpose.
-- Answers are **double-checked by a second provider**, not cryptographically proven. Two providers would have to lie the same way to fool it. Light-client verification is the next step.
-- The public Tor gateway is the Anon-RPC demo gateway, which has limited capacity and can be slow to connect. That's why Nym is the default. Production use should run its own gateway.
+- The approval check covers **Ethereum**; balances cover six chains.
+- It checks listed tokens and contracts, not every approval ever made. Finding all approvals needs an indexer (which would see the wallet) or thousands of slow history queries through a mixnet.
+- "Held on 6 chains" isn't a full net worth: other chains and tokens aren't counted, for the same reason.
+- **Revoking is public**, like every transaction.
+- It **can't detect a stolen recovery phrase.** A thief with your key doesn't need an approval.
+- Answers are double-checked by two providers, not yet proven with a light client.
+- Mixnets are slower than direct connections; a check usually takes 10 to 60 seconds.
 
 ## Run it
 
 ```bash
 npm install
-npm run dev
+npm run dev   # http://localhost:3000
 ```
 
-Open http://localhost:3000. The first private connection takes about 10 to 20 seconds on Nym, and longer on Tor.
-
-The Leak lab needs the dev or Node server (it uses the `/api/spy` route). Its notes live in memory only and are cleared with the Clear button.
+The Compare page needs the dev or Node server (it uses the `/api/spy` route, which keeps its notes in memory only). Add `?dev` to the URL to reveal a non-private test network for debugging.
 
 ## Tech
 
-Next.js, TypeScript, Tailwind CSS, viem, `@anon-rpc/browser-harness`, Motion.
+Next.js 16, TypeScript, Tailwind CSS, Motion, viem, `@anon-rpc/browser-harness`, Nym and Nox, Multicall3, Chainlink Data Feeds.
+
+## AI use
+
+We used Claude Code as a coding and research assistant: writing and refactoring code, verifying contract addresses on-chain, browser testing and interface design. We reviewed and can explain every part.
+
+## Credits
+
+Anon-RPC: the Ethereum Foundation's Access Layer team. Nym and Nox mixnets. Prices: Chainlink.
 
 ## License
 
